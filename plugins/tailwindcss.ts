@@ -1,23 +1,14 @@
-import tailwind from "../deps/tailwindcss.ts";
-import { getExtension } from "../core/utils/path.ts";
-import { merge } from "../core/utils/object.ts";
-
-import type { Config } from "../deps/tailwindcss.ts";
+import { dirname } from "jsr:@std/path";
 import type Site from "../core/site.ts";
+import { merge } from "../core/utils/object.ts";
+import { compile, Scanner } from "../deps/tailwindcss.ts";
 
 export interface Options {
-  /** Extensions processed by this plugin to extract the utility classes */
-  extensions?: string[];
-
-  /**
-   * Options passed to TailwindCSS.
-   * @see https://tailwindcss.com/docs/configuration
-   */
-  options?: Omit<Config, "content">;
+  input?: string;
 }
 
 export const defaults: Options = {
-  extensions: [".html"],
+  input: "./styles.css",
 };
 
 /**
@@ -28,46 +19,66 @@ export function tailwindCSS(userOptions?: Options) {
   const options = merge(defaults, userOptions);
 
   return (site: Site) => {
-    // deno-lint-ignore no-explicit-any
-    let tailwindPlugins: any[];
+    site.loadAssets([".css"]);
+    site.process([".css"], async (pages) => {
+      /**
+       * Naive implementation of Tailwind V4
+       * Tailwind V4 uses a CSS file as "input" and configuration.
+       * 1. create the compiler with the css input file.
+       * 2. scan the sources
+       * 3. build the css from the scanned candidates
+       * 4. write the file out
+       *
+       * This requires consumers of the plugin to
+       * - include `npm:tailwindcss@4.0.0` in the `deno.json` as an import
+       * - and set "nodeModulesDir": "auto" in the `deno.json`
+       */
 
-    if (site.hooks.postcss) {
-      throw new Error(
-        "PostCSS plugin is required to be installed AFTER TailwindCSS plugin",
-      );
-    }
+      // Adapted from https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/%40tailwindcss-cli/src/commands/build/index.ts#L152
+      const input = await Deno.readTextFile(options.input);
+      const inputFilePath = await Deno.realPath(options.input);
+      const inputBasePath = options.input ? dirname(inputFilePath) : Deno.cwd();
+      const fullRebuildPaths: string[] = inputFilePath ? [inputFilePath] : [];
 
-    site.process(options.extensions, (pages) => {
-      // Get the content of all HTML pages (sorted by path)
-      const content = pages.sort((a, b) => a.src.path.localeCompare(b.src.path))
-        .map((page) => ({
-          raw: page.content as string,
-          extension: getExtension(page.outputPath).substring(1),
-        }));
-
-      // Create Tailwind plugin
-      // @ts-ignore: This expression is not callable.
-      const plugin = tailwind({
-        ...options.options,
-        content,
-      });
-
-      // Ensure PostCSS plugin is installed
-      if (!site.hooks.postcss) {
-        throw new Error(
-          "PostCSS plugin is required to be installed AFTER TailwindCSS plugin",
-        );
-      }
-
-      // Replace the old Tailwind plugin configuration from PostCSS plugins
-      // deno-lint-ignore no-explicit-any
-      site.hooks.postcss((runner: any) => {
-        tailwindPlugins?.forEach((plugin) => {
-          runner.plugins.splice(runner.plugins.indexOf(plugin), 1);
+      const createCompiler = async (css: string) => {
+        const compiler = await compile(css, {
+          base: inputBasePath,
+          onDependency: (path) => {
+            fullRebuildPaths.push(path);
+          },
         });
-        tailwindPlugins = runner.normalize([plugin]);
-        runner.plugins = runner.plugins.concat(tailwindPlugins);
-      });
+
+        const sources = (() => {
+          // Disable auto source detection
+          if (compiler.root === "none") {
+            return [];
+          }
+
+          // No root specified, use the base directory
+          if (compiler.root === null) {
+            return [{ base: inputBasePath, pattern: "**/*" }];
+          }
+
+          // Use the specified root
+          return [compiler.root];
+        })().concat(compiler.globs);
+
+        const scanner = new Scanner({ sources });
+        return [compiler, scanner] as const;
+      };
+
+      for (const cssFile of pages) {
+        if (cssFile.src.entry?.src !== inputFilePath) {
+          continue;
+        }
+
+        const [compiler, scanner] = await createCompiler(input);
+        const candidates = scanner.scan();
+        const compiledCss = compiler.build(candidates);
+
+        // Lume: set the content
+        cssFile.content = compiledCss;
+      }
     });
   };
 }
