@@ -15,6 +15,7 @@ Go to the `v1` branch to see the changelog of Lume 1.
   - New option `info.image`
   - New option `info.icon`
   - New option `info.color`
+- Tailwind v4 plugin
 
 ### Changed
 - `inline`: Append classes to existing ones. [#722]

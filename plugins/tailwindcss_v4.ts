@@ -51,7 +51,6 @@ export function tailwindCSSV4(userOptions?: Options) {
     site.loadAssets([".css"]);
 
     site.process([".css"], async (pages) => {
-      const input = await Deno.readTextFile(options.input);
       const inputFilePath = await Deno.realPath(options.input);
       const inputBasePath = options.input ? dirname(inputFilePath) : Deno.cwd();
       const fullRebuildPaths: string[] = inputFilePath ? [inputFilePath] : [];
@@ -84,17 +83,19 @@ export function tailwindCSSV4(userOptions?: Options) {
         return [compiler, scanner] as const;
       };
 
-      for (const cssFile of pages) {
+      for (const page of pages) {
         // Only process the specified input file
-        if (cssFile.src.entry?.src !== inputFilePath) {
+        if (page.src.entry?.src !== inputFilePath) {
           continue;
         }
 
-        const [compiler, scanner] = await createCompiler(input);
+        page.content ??= '@import "tailwindcss"';
+        
+        const [compiler, scanner] = await createCompiler(page.content as string);
         const candidates = scanner.scan();
         const compiledCss = compiler.build(candidates);
 
-        cssFile.content = compiledCss;
+        page.content = compiledCss;
       }
     });
   };
