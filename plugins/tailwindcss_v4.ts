@@ -16,32 +16,41 @@ export const defaults: Options = {
 
 /**
  * A plugin to extract the utility classes from HTML pages and apply TailwindCSS v4
+ *
+ * @requires `npm:tailwindcss@4.0.0`
+ *
+ * @requires `nodeModulesDir: "auto"`
+ *
+ * @example
+ * ```ts
+ * import lume from "lume/mod.ts";
+ * import tailwindcss from "lume/plugins/tailwindcss_v4.ts";
+ *
+ * const site = lume();
+ * site.use(tailwindcss({ input: "./styles.css"}));
+ *
+ * export default site;
+ * ```
+ *
  * @see https://lume.land/plugins/tailwindcss/
  */
 export function tailwindCSSV4(userOptions?: Options) {
+  // Implementation adapted from
+  // https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/%40tailwindcss-cli/src/commands/build/index.ts#L152
+
   const options = merge(defaults, userOptions);
 
+  if (!options.input.endsWith(".css")) {
+    throw new Error(
+      "The input file must be a CSS file. Use the `@config` directive to load a legacy JavaScript-based configuration file. https://tailwindcss.com/docs/functions-and-directives#compatibility",
+    );
+  }
+
   return (site: Site) => {
-    // Load Tailwind v4 input file
+    // Load input file
     site.loadAssets([".css"]);
 
     site.process([".css"], async (pages) => {
-      console.log(pages);
-
-      /**
-       * Naive implementation of Tailwind V4
-       * Tailwind V4 uses a CSS file as "input" and configuration.
-       * 1. create the compiler with the css input file.
-       * 2. scan the sources
-       * 3. build the css from the scanned candidates
-       * 4. write the file out
-       *
-       * This requires consumers of the plugin to
-       * - include `npm:tailwindcss@4.0.0` in the `deno.json` as an import
-       * - and set "nodeModulesDir": "auto" in the `deno.json`
-       */
-
-      // Adapted from https://github.com/tailwindlabs/tailwindcss/blob/v4.0.0/packages/%40tailwindcss-cli/src/commands/build/index.ts#L152
       const input = await Deno.readTextFile(options.input);
       const inputFilePath = await Deno.realPath(options.input);
       const inputBasePath = options.input ? dirname(inputFilePath) : Deno.cwd();
@@ -71,10 +80,12 @@ export function tailwindCSSV4(userOptions?: Options) {
         })().concat(compiler.globs);
 
         const scanner = new Scanner({ sources });
+
         return [compiler, scanner] as const;
       };
 
       for (const cssFile of pages) {
+        // Only process the specified input file
         if (cssFile.src.entry?.src !== inputFilePath) {
           continue;
         }
